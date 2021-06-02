@@ -1,0 +1,967 @@
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE  1
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+Warning[205]: Found directive in column 1. (include)
+                      00001 include "p16f877A.inc"
+                      00001         LIST
+                      00002 
+                      00003 ;==========================================================================
+                      00004 ;  MPASM PIC16F877A processor include
+                      00005 ; 
+                      00006 ;  (c) Copyright 1999-2013 Microchip Technology, All rights reserved
+                      00007 ;==========================================================================
+                      00008 
+                      00566         LIST
+2007   3939           00002         __CONFIG _DEBUG_OFF&_CP_OFF&_WRT_HALF&_CPD_OFF&_LVP_OFF&_BODEN_OFF&_PWRTE_OFF&_WDT_OFF&_XT_OSC
+                      00003 ;***********************************************
+                      00004 ;RC0 as RS      (Register Select)
+                      00005 ;The RW pin (Read/Write) of the LCD is connected to RC1
+                      00006 ;RC2 as E       (LCD Enable)
+                      00007 ;RB0:RB7  (LCD Data)
+                      00008 ;TEMP SENSOR EQU RA0=>AN0
+                      00009 ;MOISTER SENSOR EQU RA2
+                      00010 ;LDR EQU RA1
+                      00011 ;HEAT COILS EQU RD5
+                      00012 ;LIGHT EQU RD4
+                      00013 ;
+                      00014 ;
+                      00015 ;
+                      00016 ;*********************************************************************************
+  0000000C            00017 DCounter1 EQU 0X0C
+  0000000D            00018 DCounter2 EQU 0X0D
+  0000000E            00019 DCounter3 EQU 0X0E
+  0000000F            00020 DCounter4 EQU 0X0F
+                      00021 ;**********************************************************************************
+                      00022 ; Macro definitions
+                      00023 push    macro
+                      00024         movwf           WTemp           ; WTemp must be reserved in all banks
+                      00025         swapf           STATUS,W        ; store in W without affecting status bits
+                      00026         banksel StatusTemp      ; select StatusTemp bank
+                      00027         movwf           StatusTemp      ; save STATUS
+                      00028         endm
+                      00029 pop     macro
+                      00030         banksel StatusTemp              ; point to StatusTemp bank
+                      00031         swapf           StatusTemp,W    ; unswap STATUS nibbles into W  
+                      00032         movwf           STATUS          ; restore STATUS
+                      00033         swapf           WTemp,F         ; unswap W nibbles
+                      00034         swapf           WTemp,W         ; restore W without affecting STATUS
+                      00035         endm
+                      00036 ;********************************************************************************
+                      00037 ; User-defined variables
+                      00038         cblock          0x20            ; bank 0 assignnments
+  00000020            00039                         WTemp           ; WTemp must be reserved in all banks
+  00000021            00040                         StatusTemp
+  00000022            00041                 msd
+  00000023            00042                         lsd
+  00000024            00043                         Time
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE  2
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+  00000025            00044                         COUNT1
+  00000026            00045             COUNT2
+  00000027            00046             COUNT3
+  00000028            00047                         Truetemp 
+  00000029            00048                         Aq_Time
+  0000002A            00049             Measured_Temp
+  0000002B            00050             Measured_Light
+  0000002C            00051             Measured_Moisture
+                      00052         endc
+                      00053         cblock          0x0A0   ; bank 1 assignnments
+  000000A0            00054                         WTemp1          ; bank 1 WTemp
+                      00055         endc
+                      00056         cblock          0x120   ; bank 2 assignnments
+  00000120            00057                         WTemp2          ; bank 2 WTemp
+                      00058         endc
+                      00059         cblock          0x1A0   ; bank 3 assignnments
+  000001A0            00060                         WTemp3          ; bank 3 WTemp
+                      00061         endc
+                      00062 ;**********************************************************************************
+                      00063 ; Start of executable code
+                      00064 
+0000                  00065         org             0x000
+0000   0000           00066         nop                             
+0001   2805           00067         goto            Main
+                      00068 
+                      00069 ;**********************************************************
+                      00070 ; Interrupt vector
+0002                  00071 INT_SVC
+0004                  00072         org             0x0004          
+0004   2802           00073         goto            INT_SVC ; jump to the interrupt service routine
+                      00074 ;**********************************************************
+                      00075 ; Main Routine
+0005                  00076 Main
+0005   2009           00077         call    Initial
+0006                  00078 Main_Loop
+0006   2027           00079     call    Temperature
+0007   2081           00080     call    LCD_Display
+0008   2806           00081         goto    Main_Loop
+                      00082 ;*****************************************************************
+0009                  00083 Initial
+                      00084 ; I/O definitions
+0009   1683 1303      00085    banksel   TRISA
+000B   300A           00086    movlw     d'00000010'         ;Left justified , Fosc/8 clock 
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+000C   009F           00087    movwf     ADCON1              ;(for ADC conversion)
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+000D   0185           00088    clrf      TRISA         ;set  PortA as outputs
+000E   3007           00089    movlw     B'00000111' ; set RA0,RA1 AND RA2 INPUT FOR TEMPSENSOR ,MISTERSENSOR AND LDR  
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+000F   0085           00090    movwf     TRISA
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0010   0186           00091    clrf      TRISB  ;set all PortB pins as outputs
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE  3
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0011   0187           00092    clrf      TRISC ;set all PortC pins as outputs
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0012   0188           00093    clrf      TRISD;set all PortD pins as outputs
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0013   0189           00094    clrf      TRISE;set all PortE pins as outputs
+                      00095    ;Enabling interrupts
+0014   30C0           00096    movlw     b'11000000'         ; set GIE and PEIE
+0015   008B           00097    movwf     INTCON 
+                      00098    ;LCD INITAIALIZATION
+0016   1283 1303      00099     banksel PORTA
+0018   3038           00100         Movlw   0x38            ;8-bit mode, 2-line display, 5x7 dot format
+0019   2064           00101         Call    send_cmd        
+001A   300E           00102         Movlw   0x0e            ;Display on, Cursor Underline on, Blink off
+001B   2064           00103         Call    send_cmd
+001C   3002           00104         Movlw   0x02            ;Display and cursor home
+001D   2064           00105         Call    send_cmd
+001E   3001           00106         Movlw   0x01            ;clear display
+001F   2064           00107         Call    send_cmd 
+Warning[203]: Found opcode in column 1. (return)
+0020   0008           00108 return
+                      00109 ;*****************************************************************
+0021                  00110 A_D_Conv
+0021   207C           00111         call            Delay
+0022   151F           00112         bsf             ADCON0, GO      ; Start A/D conversion
+0023                  00113 Wait
+0023   1F0C           00114         btfss   PIR1, ADIF      ; Wait for conversion to complete
+0024   2823           00115         goto    Wait
+0025   130C           00116         bcf             PIR1, ADIF      ; Clear the A/D interrupt flag
+Warning[203]: Found opcode in column 1. (return)
+0026   0008           00117 return
+                      00118 ;***********************************************
+0027                  00119 Temperature
+Warning[202]: Argument out of range.  Least significant bits used.
+0027   3040           00120     movlw     d'01000000'       ;choose chanel AN0 for temperature sensor
+0028   009F           00121     movwf     ADCON0
+0029   2021           00122     call      A_D_Conv
+002A   3015           00123     movlw     0x15
+002B   00A9           00124     movwf     Aq_Time           ;wait aquiastion time
+002C   0BA9           00125 X   decfsz    Aq_Time,f
+002D   282C           00126     goto      X
+002E   081E           00127     movf      ADRESH , w
+002F   00AA           00128     movwf     Measured_Temp
+0030   082A           00129     movf      Measured_Temp, W 
+0031   3C14           00130     sublw     D'20'   ;d - Measured_Temp
+0032   1C03           00131     btfss     STATUS, C 
+0033   2835           00132     goto      great  ;C = 0, that's B = 1, then Measured_Light> 20
+0034   283A           00133     goto      small ;C = 1, that's B = 0, then Measured_Light < 20
+                      00134 ;**********************************************************************************
+0035                  00135 great
+0035   082A           00136     movf      Measured_Temp, W 
+0036   3C19           00137     sublw     D'25'   ;d - Measured_Temp
+0037   1C03           00138     btfss     STATUS, C 
+0038   283D           00139     goto      fan  ;C = 0, that's B = 1, then Measured_Light> 25
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE  4
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0039   283F           00140     goto      Light ;C = 1, that's B = 0, then Measured_Light < 25
+                      00141 ;**********************************************************************************
+003A                  00142 small
+Warning[203]: Found opcode in column 1. (bcf)
+003A   1288           00143 bcf  PORTD,RD5;MAKE HEATCOIL OFF
+                      00144 
+Warning[203]: Found opcode in column 1. (BSF)
+003B   1408           00145 BSF  PORTD,RD0;MAKE fan ON
+Warning[203]: Found opcode in column 1. (GOTO)
+003C   283F           00146 GOTO Light
+                      00147 ;**********************************************************************************
+003D                  00148 fan
+Warning[203]: Found opcode in column 1. (bcf)
+003D   1008           00149 bcf  PORTD,RD0;MAKE FAN OFF
+                      00150 
+Warning[203]: Found opcode in column 1. (BSF)
+003E   1688           00151 BSF  PORTD,RD5;MAKE HEATCOIL ON
+                      00152 ;**********************************************************************************
+003F                  00153 Light
+003F   1208           00154          bcf       PORTD,RD4; make light on 
+Warning[202]: Argument out of range.  Least significant bits used.
+0040   3041           00155      movlw     d'01000001'       ;choose chanel AN1 for LDR  Focs/8
+0041   009F           00156      movwf     ADCON0
+0042   2021           00157      call      A_D_Conv
+0043   3015           00158      movlw     0x15
+0044   00A9           00159      movwf     Aq_Time           ;wait aquiastion time
+0045   0BA9           00160 X1    decfsz    Aq_Time,f
+0046   2845           00161      goto X1
+0047   081E           00162      movf     ADRESH , w
+0048   00AB           00163      movwf    Measured_Light    
+0049   082B           00164      movf Measured_Light, W 
+004A   3C2D           00165      sublw D'45'   ;d - Measured_Light
+004B   1C03           00166      btfss STATUS, C 
+004C   284E           00167      goto lightsource  ;C = 0, that's B = 1, then Measured_Light> 45 
+004D   2850           00168      goto Moisture ;C = 1, that's B = 0, then Measured_Light < 45 
+                      00169 ;**********************************************************************************
+004E                  00170 lightsource
+004E   1608           00171       bsf PORTD,RD4 ;make light on
+004F   2850           00172       goto Moisture
+                      00173 ;********************************************************************************** 
+0050                  00174 Moisture
+0050   1108           00175      bcf       PORTD,RD2  ;make water pump off
+Warning[202]: Argument out of range.  Least significant bits used.
+0051   304A           00176      movlw     d'01000010'       ;choose chanel AN2 for Moisture SENSOR
+0052   009F           00177      movwf     ADCON0
+0053   2021           00178      call      A_D_Conv
+0054   3015           00179      movlw     0x15
+0055   00A9           00180      movwf     Aq_Time           ;wait aquiastion time
+0056   0BA9           00181 X2   decfsz    Aq_Time,f
+0057   2856           00182      goto X2
+0058   081E           00183      movf     ADRESH , w
+0059   00AC           00184      movwf    Measured_Moisture   
+005A   082C           00185      movf    Measured_Moisture, W 
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE  5
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+005B   3C14           00186      sublw D'20'   ;d - Measured_Moisture
+005C   1C03           00187      btfss STATUS, C 
+005D   2862           00188      goto  finsh  ;C = 0, that's B = 1, then Measured_Moisture> 20
+005E   284E           00189      goto lightsource ;C = 1, that's B = 0, then Measured_Moisture < 20 
+                      00190 ;**********************************************************************************
+005F                  00191 waterpump          
+005F   1508           00192       bsf PORTD,RD2;make water pump on
+0060   208E           00193       call  DELAY
+Warning[203]: Found opcode in column 1. (return)
+0061   0008           00194 return
+                      00195  ;**********************************************************************************
+0062                  00196 finsh
+0062   208E           00197        call DELAY ;15 min
+Warning[203]: Found opcode in column 1. (return)
+0063   0008           00198 return
+                      00199 ;**********************************************************************************
+0064                  00200 send_cmd
+0064   0086           00201                 movwf   PORTB           
+0065   1007           00202                 bcf             PORTC,0                                                                 
+                                            
+0066   1507           00203                 bsf             PORTC,2         
+0067   0000           00204                 nop                             
+0068   1107           00205                 bcf             PORTC,2
+0069   1087           00206                 bcf             PORTC,1         
+006A   2074           00207                 call    delay                   
+006B   0008           00208                 return
+                      00209 ;********************************************************
+006C                  00210 send_char
+006C   0086           00211                 movwf   PORTB                   
+006D   1407           00212                 bsf             PORTC,0  
+006E   1507           00213                 bsf             PORTC,2                         
+006F   0000           00214                 nop
+0070   1107           00215                 bcf             PORTC,2
+0071   1087           00216                 bcf             PORTC,1
+0072   2074           00217                 call    delay
+0073   0008           00218                 return
+                      00219 ;**********************************************************
+0074                  00220 delay                                                                                   
+0074   3080           00221                 movlw   0x80                    
+0075   00A2           00222                 movwf   msd
+0076   01A3           00223                 clrf    lsd
+0077                  00224 loop2
+0077   0BA3           00225                 decfsz  lsd,f
+0078   2877           00226                 goto    loop2
+0079   0BA2           00227                 decfsz  msd,f
+007A   2877           00228                 goto    loop2
+007B                  00229 endLcd
+007B   0008           00230                 return
+                      00231 ;**********************************************************
+007C                  00232 Delay
+007C   3015           00233         movlw           0x15
+007D   00A4           00234         movwf           Time
+007E   0BA4           00235 X3      decfsz  Time,f
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE  6
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+007F   287E           00236         goto            X3
+0080   0008           00237         return
+                      00238 ;**********************************************************
+0081                  00239 LCD_Display
+0081   3080           00240         movlw   0x80            ;set LCD display address
+0082   2064           00241         call    send_cmd
+0083   3045           00242         movlw   0x45
+0084   206C           00243         call    send_char       ;Display "T" on LCD     
+0085   303D           00244         movlw   0x3D
+0086   206C           00245         call    send_char       ;Display "=" on LCD
+0087   209F           00246     CALL    TESTTEMP
+0088   3063           00247         movlw   0x63
+0089   206C           00248         call    send_char       ;Display "M" on LCD
+008A   20CF           00249         CALL    TESTM
+008B   3053           00250         movlw   0x53
+008C   206C           00251         call    send_char       ;Display "L" on LCD
+008D   20D5           00252         CALL    TESTLED
+                      00253 ;******************************************************
+008E                  00254 DELAY
+008E   303F           00255     MOVLW 0X3f
+008F   008C           00256     MOVWF DCounter1
+0090   30B4           00257     MOVLW 0Xb4
+0091   008D           00258         MOVWF DCounter2
+0092   30D6           00259         MOVLW 0Xd6
+0093   008E           00260         MOVWF DCounter3
+0094   3012           00261         MOVLW 0X12
+0095   008F           00262         MOVWF DCounter4
+0096                  00263 LOOP
+0096   0B8C           00264         DECFSZ DCounter1, 1
+0097   2896           00265         GOTO LOOP
+0098   0B8D           00266         DECFSZ DCounter2, 1
+0099   2896           00267         GOTO LOOP
+009A   0B8E           00268         DECFSZ DCounter3, 1
+009B   2896           00269         GOTO LOOP
+009C   0B8F           00270         DECFSZ DCounter4, 1
+009D   2896           00271         GOTO LOOP
+Warning[203]: Found opcode in column 1. (RETURN)
+009E   0008           00272 RETURN
+                      00273 ;***************************************************
+009F                  00274 TESTTEMP
+009F   01A5           00275         CLRF COUNT1
+00A0   01A6           00276         CLRF COUNT2
+00A1   01A7           00277         CLRF COUNT3
+00A2                  00278 CONVERT1
+00A2   08AA           00279         MOVF Measured_Temp,1
+00A3   1903           00280         BTFSC STATUS,Z
+00A4   28B4           00281         GOTO FINISH
+00A5   03AA           00282         DECF Measured_Temp ,1
+                      00283 ;TENCHECK
+Message[305]: Using default destination of 1 (file).
+00A6   0AA5           00284         INCF COUNT1
+00A7   0825           00285         MOVF COUNT1,W
+00A8   3C05           00286         SUBLW B'101'
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE  7
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+00A9   1D03           00287         BTFSS STATUS,Z
+00AA   28A2           00288         GOTO CONVERT1
+Message[305]: Using default destination of 1 (file).
+00AB   0AA6           00289         INCF COUNT2
+00AC   01A5           00290         CLRF COUNT1
+                      00291 ;hundreds_check
+00AD   0826           00292         MOVF COUNT2,W
+00AE   3C05           00293         SUBLW B'101'
+00AF   1D03           00294         BTFSS STATUS,Z
+00B0   28A2           00295         GOTO CONVERT1
+Message[305]: Using default destination of 1 (file).
+00B1   0AA7           00296         INCF COUNT3
+00B2   01A6           00297         CLRF COUNT2
+00B3   28A2           00298         GOTO CONVERT1
+00B4                  00299 FINISH
+00B4   3030           00300     MOVLW   0X30
+00B5   0727           00301     ADDWF   COUNT3,0
+00B6   206C           00302         Call         send_char
+                      00303         
+00B7   3002           00304         Movlw   0x02
+00B8   2064           00305         Call         send_cmd
+                      00306          
+00B9   3030           00307     MOVLW   0X30
+00BA   0726           00308     ADDWF   COUNT2,0
+00BB   206C           00309         Call         send_char
+                      00310                  
+00BC   3002           00311         Movlw   0x02
+00BD   2064           00312         Call         send_cmd
+                      00313                 
+00BE   3030           00314     MOVLW   0X30
+00BF   0725           00315     ADDWF   COUNT1,0
+00C0   206C           00316         Call         send_char
+                      00317                  
+00C1   3002           00318         Movlw   0x02
+00C2   2064           00319         Call         send_cmd
+                      00320                 
+00C3   3042           00321     MOVLW   0X42
+00C4   206C           00322         Call         send_char
+                      00323                  
+00C5   3002           00324         Movlw   0x02
+00C6   2064           00325         Call         send_cmd
+                      00326 
+00C7   3050           00327     MOVLW   0X50
+00C8   206C           00328         Call         send_char
+                      00329                  
+00C9   3002           00330         Movlw   0x02
+00CA   2064           00331         Call         send_cmd
+                      00332 
+00CB   304D           00333     MOVLW   0X4D
+00CC   206C           00334         Call         send_char
+                      00335                  
+00CD   3002           00336         Movlw   0x02
+00CE   2064           00337         Call         send_cmd
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE  8
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00338                 
+00CF                  00339 retur
+                      00340 ;****************************************************
+00CF                  00341 TESTM
+00CF   082C           00342     MOVF    Measured_Moisture, W
+00D0   3C14           00343     SUBLW   D'20'
+00D1   1803           00344     btfsc       STATUS,C
+00D2   28DB           00345     GOTO    rich
+00D3   28E4           00346     GOTO    poor
+Warning[203]: Found opcode in column 1. (RETURN)
+00D4   0008           00347 RETURN
+                      00348 ;******************************************************
+00D5                  00349 TESTLED
+00D5   082B           00350      movf Measured_Light, W 
+00D6   3C2D           00351      sublw D'45'   ;d - Measured_Light
+00D7   1803           00352      btfsc STATUS, C
+00D8   28EB           00353      goto ON
+00D9   28F0           00354      goto OFF 
+Warning[203]: Found opcode in column 1. (RETURN)
+00DA   0008           00355 RETURN
+                      00356 ;*********************************************************
+00DB                  00357 rich
+00DB   3048           00358     movlw       0x48
+00DC   206C           00359         call    send_char
+00DD   3067           00360     movlw       0x67
+00DE   206C           00361         call    send_char
+00DF   3036           00362     movlw       0x36
+00E0   206C           00363         call    send_char 
+00E1   3068           00364     movlw       0x68
+00E2   206C           00365         call    send_char
+Warning[203]: Found opcode in column 1. (RETURN)
+00E3   0008           00366 RETURN
+00E4                  00367 poor
+00E4   303C           00368     movlw       0x3C
+00E5   206C           00369         call    send_char
+00E6   306F           00370     movlw       0x6F
+00E7   206C           00371         call    send_char
+00E8   3077           00372     movlw       0x77
+00E9   206C           00373         call    send_char
+Warning[203]: Found opcode in column 1. (RETURN)
+00EA   0008           00374 RETURN
+00EB                  00375 ON
+00EB   303F           00376     movlw       0x3F
+00EC   206C           00377         call    send_char
+00ED   306E           00378     movlw       0x6E
+00EE   206C           00379         call    send_char
+Warning[203]: Found opcode in column 1. (RETURN)
+00EF   0008           00380 RETURN
+00F0                  00381 OFF
+00F0   303F           00382     movlw       0x3F
+00F1   206C           00383         call    send_char
+00F2   3066           00384     movlw       0x66
+00F3   206C           00385         call    send_char
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE  9
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+00F4   3066           00386     movlw       0x66
+00F5   206C           00387         call    send_char
+Warning[203]: Found opcode in column 1. (RETURN)
+00F6   0008           00388 RETURN
+                      00389 
+Warning[205]: Found directive in column 1. (END)
+                      00390 END
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE 10
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+ACKDT                             00000005
+ACKEN                             00000004
+ACKSTAT                           00000006
+ADCON0                            0000001F
+ADCON1                            0000009F
+ADCS0                             00000006
+ADCS1                             00000007
+ADCS2                             00000006
+ADDEN                             00000003
+ADFM                              00000007
+ADIE                              00000006
+ADIF                              00000006
+ADON                              00000000
+ADRESH                            0000001E
+ADRESL                            0000009E
+A_D_Conv                          00000021
+Aq_Time                           00000029
+BCLIE                             00000003
+BCLIF                             00000003
+BF                                00000000
+BRGH                              00000002
+C                                 00000000
+C1INV                             00000004
+C1OUT                             00000006
+C2INV                             00000005
+C2OUT                             00000007
+CCP1CON                           00000017
+CCP1IE                            00000002
+CCP1IF                            00000002
+CCP1M0                            00000000
+CCP1M1                            00000001
+CCP1M2                            00000002
+CCP1M3                            00000003
+CCP1X                             00000005
+CCP1Y                             00000004
+CCP2CON                           0000001D
+CCP2IE                            00000000
+CCP2IF                            00000000
+CCP2M0                            00000000
+CCP2M1                            00000001
+CCP2M2                            00000002
+CCP2M3                            00000003
+CCP2X                             00000005
+CCP2Y                             00000004
+CCPR1                             00000015
+CCPR1H                            00000016
+CCPR1L                            00000015
+CCPR2                             0000001B
+CCPR2H                            0000001C
+CCPR2L                            0000001B
+CHS0                              00000003
+CHS1                              00000004
+CHS2                              00000005
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE 11
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+CIS                               00000003
+CKE                               00000006
+CKP                               00000004
+CM0                               00000000
+CM1                               00000001
+CM2                               00000002
+CMCON                             0000009C
+CMIE                              00000006
+CMIF                              00000006
+CONVERT1                          000000A2
+COUNT1                            00000025
+COUNT2                            00000026
+COUNT3                            00000027
+CREN                              00000004
+CSRC                              00000007
+CVR0                              00000000
+CVR1                              00000001
+CVR2                              00000002
+CVR3                              00000003
+CVRCON                            0000009D
+CVREN                             00000007
+CVROE                             00000006
+CVRR                              00000005
+D                                 00000005
+DATA_ADDRESS                      00000005
+DC                                00000001
+DCounter1                         0000000C
+DCounter2                         0000000D
+DCounter3                         0000000E
+DCounter4                         0000000F
+DELAY                             0000008E
+D_A                               00000005
+D_NOT_A                           00000005
+Delay                             0000007C
+EEADR                             0000010D
+EEADRH                            0000010F
+EECON1                            0000018C
+EECON2                            0000018D
+EEDATA                            0000010C
+EEDATH                            0000010E
+EEIE                              00000004
+EEIF                              00000004
+EEPGD                             00000007
+F                                 00000001
+FERR                              00000002
+FINISH                            000000B4
+FSR                               00000004
+GCEN                              00000007
+GIE                               00000007
+GO                                00000002
+GO_DONE                           00000002
+GO_NOT_DONE                       00000002
+I2C_DATA                          00000005
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE 12
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+I2C_READ                          00000002
+I2C_START                         00000003
+I2C_STOP                          00000004
+IBF                               00000007
+IBOV                              00000005
+INDF                              00000000
+INTCON                            0000000B
+INTE                              00000004
+INTEDG                            00000006
+INTF                              00000001
+INT_SVC                           00000002
+IRP                               00000007
+Initial                           00000009
+LCD_Display                       00000081
+LOOP                              00000096
+Light                             0000003F
+Main                              00000005
+Main_Loop                         00000006
+Measured_Light                    0000002B
+Measured_Moisture                 0000002C
+Measured_Temp                     0000002A
+Moisture                          00000050
+NOT_A                             00000005
+NOT_ADDRESS                       00000005
+NOT_BO                            00000000
+NOT_BOR                           00000000
+NOT_DONE                          00000002
+NOT_PD                            00000003
+NOT_POR                           00000001
+NOT_RBPU                          00000007
+NOT_RC8                           00000006
+NOT_T1SYNC                        00000002
+NOT_TO                            00000004
+NOT_TX8                           00000006
+NOT_W                             00000002
+NOT_WRITE                         00000002
+OBF                               00000006
+OERR                              00000001
+OFF                               000000F0
+ON                                000000EB
+OPTION_REG                        00000081
+P                                 00000004
+PCFG0                             00000000
+PCFG1                             00000001
+PCFG2                             00000002
+PCFG3                             00000003
+PCL                               00000002
+PCLATH                            0000000A
+PCON                              0000008E
+PEIE                              00000006
+PEN                               00000002
+PIE1                              0000008C
+PIE2                              0000008D
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE 13
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+PIR1                              0000000C
+PIR2                              0000000D
+PORTA                             00000005
+PORTB                             00000006
+PORTC                             00000007
+PORTD                             00000008
+PORTE                             00000009
+PR2                               00000092
+PS0                               00000000
+PS1                               00000001
+PS2                               00000002
+PSA                               00000003
+PSPIE                             00000007
+PSPIF                             00000007
+PSPMODE                           00000004
+R                                 00000002
+RA0                               00000000
+RA1                               00000001
+RA2                               00000002
+RA3                               00000003
+RA4                               00000004
+RA5                               00000005
+RB0                               00000000
+RB1                               00000001
+RB2                               00000002
+RB3                               00000003
+RB4                               00000004
+RB5                               00000005
+RB6                               00000006
+RB7                               00000007
+RBIE                              00000003
+RBIF                              00000000
+RC0                               00000000
+RC1                               00000001
+RC2                               00000002
+RC3                               00000003
+RC4                               00000004
+RC5                               00000005
+RC6                               00000006
+RC7                               00000007
+RC8_9                             00000006
+RC9                               00000006
+RCD8                              00000000
+RCEN                              00000003
+RCIE                              00000005
+RCIF                              00000005
+RCREG                             0000001A
+RCSTA                             00000018
+RD                                00000000
+RD0                               00000000
+RD1                               00000001
+RD2                               00000002
+RD3                               00000003
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE 14
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+RD4                               00000004
+RD5                               00000005
+RD6                               00000006
+RD7                               00000007
+RE0                               00000000
+RE1                               00000001
+RE2                               00000002
+READ_WRITE                        00000002
+RP0                               00000005
+RP1                               00000006
+RSEN                              00000001
+RX9                               00000006
+RX9D                              00000000
+R_NOT_W                           00000002
+R_W                               00000002
+S                                 00000003
+SEN                               00000000
+SMP                               00000007
+SPBRG                             00000099
+SPEN                              00000007
+SREN                              00000005
+SSPADD                            00000093
+SSPBUF                            00000013
+SSPCON                            00000014
+SSPCON2                           00000091
+SSPEN                             00000005
+SSPIE                             00000003
+SSPIF                             00000003
+SSPM0                             00000000
+SSPM1                             00000001
+SSPM2                             00000002
+SSPM3                             00000003
+SSPOV                             00000006
+SSPSTAT                           00000094
+STATUS                            00000003
+SYNC                              00000004
+StatusTemp                        00000021
+T0CS                              00000005
+T0IE                              00000005
+T0IF                              00000002
+T0SE                              00000004
+T1CKPS0                           00000004
+T1CKPS1                           00000005
+T1CON                             00000010
+T1INSYNC                          00000002
+T1OSCEN                           00000003
+T1SYNC                            00000002
+T2CKPS0                           00000000
+T2CKPS1                           00000001
+T2CON                             00000012
+TESTLED                           000000D5
+TESTM                             000000CF
+TESTTEMP                          0000009F
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE 15
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+TMR0                              00000001
+TMR0IE                            00000005
+TMR0IF                            00000002
+TMR1                              0000000E
+TMR1CS                            00000001
+TMR1H                             0000000F
+TMR1IE                            00000000
+TMR1IF                            00000000
+TMR1L                             0000000E
+TMR1ON                            00000000
+TMR2                              00000011
+TMR2IE                            00000001
+TMR2IF                            00000001
+TMR2ON                            00000002
+TOUTPS0                           00000003
+TOUTPS1                           00000004
+TOUTPS2                           00000005
+TOUTPS3                           00000006
+TRISA                             00000085
+TRISA0                            00000000
+TRISA1                            00000001
+TRISA2                            00000002
+TRISA3                            00000003
+TRISA4                            00000004
+TRISA5                            00000005
+TRISB                             00000086
+TRISB0                            00000000
+TRISB1                            00000001
+TRISB2                            00000002
+TRISB3                            00000003
+TRISB4                            00000004
+TRISB5                            00000005
+TRISB6                            00000006
+TRISB7                            00000007
+TRISC                             00000087
+TRISC0                            00000000
+TRISC1                            00000001
+TRISC2                            00000002
+TRISC3                            00000003
+TRISC4                            00000004
+TRISC5                            00000005
+TRISC6                            00000006
+TRISC7                            00000007
+TRISD                             00000088
+TRISD0                            00000000
+TRISD1                            00000001
+TRISD2                            00000002
+TRISD3                            00000003
+TRISD4                            00000004
+TRISD5                            00000005
+TRISD6                            00000006
+TRISD7                            00000007
+TRISE                             00000089
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE 16
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+TRISE0                            00000000
+TRISE1                            00000001
+TRISE2                            00000002
+TRMT                              00000001
+TX8_9                             00000006
+TX9                               00000006
+TX9D                              00000000
+TXD8                              00000000
+TXEN                              00000005
+TXIE                              00000004
+TXIF                              00000004
+TXREG                             00000019
+TXSTA                             00000098
+Temperature                       00000027
+Time                              00000024
+Truetemp                          00000028
+UA                                00000001
+W                                 00000000
+WCOL                              00000007
+WR                                00000001
+WREN                              00000002
+WRERR                             00000003
+WTemp                             00000020
+WTemp1                            000000A0
+WTemp2                            00000120
+WTemp3                            000001A0
+Wait                              00000023
+X                                 0000002C
+X1                                00000045
+X2                                00000056
+X3                                0000007E
+Z                                 00000002
+_BODEN_OFF                        00003FBF
+_BODEN_ON                         00003FFF
+_BOREN_OFF                        00003FBF
+_BOREN_ON                         00003FFF
+_CONFIG                           00002007
+_CPD_OFF                          00003FFF
+_CPD_ON                           00003EFF
+_CP_ALL                           00001FFF
+_CP_OFF                           00003FFF
+_CP_ON                            00001FFF
+_DEBUG_OFF                        00003FFF
+_DEBUG_ON                         000037FF
+_DEVID1                           00002006
+_FOSC_EXTRC                       00003FFF
+_FOSC_HS                          00003FFE
+_FOSC_LP                          00003FFC
+_FOSC_XT                          00003FFD
+_HS_OSC                           00003FFE
+_IDLOC0                           00002000
+_IDLOC1                           00002001
+_IDLOC2                           00002002
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE 17
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+_IDLOC3                           00002003
+_LP_OSC                           00003FFC
+_LVP_OFF                          00003F7F
+_LVP_ON                           00003FFF
+_PWRTE_OFF                        00003FFF
+_PWRTE_ON                         00003FF7
+_RC_OSC                           00003FFF
+_WDTE_OFF                         00003FFB
+_WDTE_ON                          00003FFF
+_WDT_OFF                          00003FFB
+_WDT_ON                           00003FFF
+_WRT_1FOURTH                      00003BFF
+_WRT_256                          00003DFF
+_WRT_HALF                         000039FF
+_WRT_OFF                          00003FFF
+_XT_OSC                           00003FFD
+__16F877A                         00000001
+__DEBUG                           1
+delay                             00000074
+endLcd                            0000007B
+fan                               0000003D
+finsh                             00000062
+great                             00000035
+lightsource                       0000004E
+loop2                             00000077
+lsd                               00000023
+msd                               00000022
+poor                              000000E4
+pop                               
+push                              
+retur                             000000CF
+rich                              000000DB
+send_char                         0000006C
+send_cmd                          00000064
+small                             0000003A
+waterpump                         0000005F
+
+
+MEMORY USAGE MAP ('X' = Used,  '-' = Unused)
+
+0000 : XX--XXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0040 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0080 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+00C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXX---------
+2000 : -------X-------- ---------------- ---------------- ----------------
+
+All other memory blocks unused.
+
+Program Memory Words Used:   245
+Program Memory Words Free:  7947
+
+MPASM  5.51                       PROJECT.ASM   5-28-2021  22:05:28         PAGE 18
+
+
+
+
+
+
+Errors   :     0
+Warnings :    21 reported,     0 suppressed
+Messages :    10 reported,     0 suppressed
+
+
